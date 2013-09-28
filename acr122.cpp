@@ -90,6 +90,7 @@ const char acr122::Command(char* command)
     //Read response
     //char buffer[100];
     //int bufferOffset = 0;
+    //@TODO rewrite this on two parts, first of all read all data into buffer[100] after read end it by null byte, then detect header and body of response
     while(1)
     {
         int bitBuffer[1];
