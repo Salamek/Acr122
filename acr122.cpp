@@ -2,6 +2,7 @@
 #include <termios.h>
 #include <string.h>
 //!FIXME Only for devel, remove me
+#include <stdlib.h>
 #include <iostream>
 using namespace std;
 
@@ -11,11 +12,12 @@ acr122::acr122(const char* device)
      //!FIXME prevent owerflow
     commandCounter = 1;
 
-    handle = open(device, O_RDWR | O_NONBLOCK | O_NOCTTY);
+    handle = open(device, O_RDWR | O_NOCTTY | O_NDELAY);
 
     if(handle < 0)
     {
         cout << "Failed to open a port " << device << endl;
+        exit (EXIT_FAILURE);
     }
     else
     {
@@ -35,9 +37,10 @@ const char acr122::Command(char* command)
     int commandEndByte = 0x03;
 
     //Response config
-    int isHeader = 1; //We read header first, then body if header is OK --> 0
-    char responseHeader[5];
-    int responseHeaderOffset = 0;
+    char wholeBuffer[50];//@TODO Maybe we will need bigger one, do some checks to prevent overflow
+    int totalLength = 0;
+    char responseFailHeader[] = {commandStartByte, 0xFF, 0xFF, commandEndByte};
+    char responseHeaderSize = sizeof(responseFailHeader)/sizeof(responseFailHeader[0]);
 
     //Request config
     int finalOffset = 0;
@@ -79,7 +82,7 @@ const char acr122::Command(char* command)
         commandSum ^= command[i];
     }
 
-    final[finalOffset++] = commandSum;
+    //final[finalOffset++] = commandSum;
 
     //End of command
     final[finalOffset++] = commandEndByte;
@@ -88,42 +91,55 @@ const char acr122::Command(char* command)
     write(handle, final, finalSize);
 
     //Read response
-    //char buffer[100];
-    //int bufferOffset = 0;
-    //@TODO rewrite this on two parts, first of all read all data into buffer[100] after read end it by null byte, then detect header and body of response
     while(1)
     {
-        int bitBuffer[1];
-        ssize_t length = read(handle, &bitBuffer, sizeof(bitBuffer)/ sizeof(bitBuffer[0]));
-        if (length == -1)
+        char whileBuffer[50]; //@TODO Maybe we will need bigger one, do some checks to prevent overflow
+        ssize_t length = read(handle, &whileBuffer, sizeof(whileBuffer)/ sizeof(whileBuffer[0]));
+        if(length > 0 )
         {
-            //printf("Error reading from serial port L: %d \n", length);
-            //break;
-        }
-        else if(length == 1 )
-        {
-            if(isHeader)
+            whileBuffer[length] = '\0';
+            for(int i = 0; i < length; i ++ )
             {
-                printf("Read header response %d!\n", bitBuffer[0]);
-                responseHeader[responseHeaderOffset++] = bitBuffer[0];
+                wholeBuffer[totalLength++] = whileBuffer[i];
             }
-            else
+
+            //Check header when i got firts 4 bytes (Thats status header)
+            if(totalLength == responseHeaderSize)
             {
-                printf("Read response %d!\n", bitBuffer[0]);
+                if(strstr (wholeBuffer, responseFailHeader) > 0)
+                {
+                    cout << "Device do not understand this command or command is in wrong format!" << endl;
+                    break;
+                }
             }
-            //buffer[bufferOffset++] = bitBuffer[0];
-            if( bitBuffer[0] == commandEndByte && isHeader)
+            //We read more then 4 bytes, that means header was ok and also last byte wont be 0x03 as header end,
+            //but 0x02 as body start or more(somewhere in middle of body), so i can wait for another 0x03 as body end and stop reading from port!
+            //So data here should look like {0x02, 0x00, 0x00, 0x03, 0x02, ..., 0x03}
+            else if(totalLength > responseHeaderSize && wholeBuffer[totalLength - 1] == commandEndByte)
             {
-                printf("End of header response reached!\n");
-                isHeader = 0;
-                continue;
-            }
-            else if( bitBuffer[0] == commandEndByte && !isHeader)
-            {
-                //printf("End of response reached!\n");
+                wholeBuffer[totalLength] = '\0';
                 break;
             }
         }
+    }
+
+
+    //Here i need only body, so lets prepare nice and clean char array for it
+    char bodyBuffer[totalLength - responseHeaderSize];
+    for(int i = responseHeaderSize; i < totalLength; i ++ )
+    {
+        bodyBuffer[i - responseHeaderSize] = wholeBuffer[i];
+    }
+
+    //Here we should have whole OK response
+    for(int i = 0; i < totalLength; i ++ )
+    {
+        printf("Whole thing: %d \n", wholeBuffer[i]);
+    }
+
+    for(int i = 0; i < sizeof(bodyBuffer)/ sizeof(bodyBuffer[0]); i ++ )
+    {
+        printf("Body: %d \n", bodyBuffer[i]);
     }
 
     //Move up a commandCounter
