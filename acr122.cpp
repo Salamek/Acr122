@@ -1,10 +1,4 @@
 #include "acr122.h"
-#include <termios.h>
-#include <string.h>
-//!FIXME Only for devel, remove me
-#include <stdlib.h>
-#include <iostream>
-using namespace std;
 
 acr122::acr122(const char* device)
 {
@@ -40,15 +34,17 @@ const char acr122::Command(char* command)
     char wholeBuffer[50];//@TODO Maybe we will need bigger one, do some checks to prevent overflow
     int totalLength = 0;
     char responseFailHeader[] = {commandStartByte, 0xFF, 0xFF, commandEndByte};
-    char responseHeaderSize = sizeof(responseFailHeader)/sizeof(responseFailHeader[0]);
+    size_t responseHeaderSize = sizeof(responseFailHeader)/sizeof(responseFailHeader[0]);
 
     //Request config
     int finalOffset = 0;
     int commandSum = 0;
-    char header[] = {0x6F, sizeof(command), 0x00, 0x00, 0x00, 0x00, commandCounter, 0x00, 0x00, 0x00};
 
-    size_t commandSize = sizeof(command)/sizeof(command[0]);
-    size_t headerSize = sizeof(header)/sizeof(header[0]);
+    size_t commandSize = sizeof(command)/sizeof(*command);
+
+    char header[] = {0x6F, commandSize, 0x00, 0x00, 0x00, 0x00, commandCounter, 0x00, 0x00, 0x00};
+
+    size_t headerSize = sizeof(header)/sizeof(*header);
 
     //+3 are command start c_stx, command end c_etx and command sum c_sum
     size_t finalSize = commandSize + headerSize + 3;
@@ -82,10 +78,16 @@ const char acr122::Command(char* command)
         commandSum ^= command[i];
     }
 
-    //final[finalOffset++] = commandSum;
+    final[finalOffset++] = commandSum;
 
     //End of command
     final[finalOffset++] = commandEndByte;
+
+
+    //Here we should have whole OK response
+    printf("Whole thing send: ");
+    this->DebugArray(final, sizeof final / sizeof *final);
+    printf("\n");
 
     //Send command to device
     write(handle, final, finalSize);
@@ -132,18 +134,22 @@ const char acr122::Command(char* command)
     }
 
     //Here we should have whole OK response
-    for(int i = 0; i < totalLength; i ++ )
-    {
-        printf("Whole thing: %d \n", wholeBuffer[i]);
-    }
+    printf("Whole thing received: ");
+    this->DebugArray(wholeBuffer,  sizeof wholeBuffer / sizeof *wholeBuffer);
+    printf("\n");
 
-    for(int i = 0; i < sizeof(bodyBuffer)/ sizeof(bodyBuffer[0]); i ++ )
-    {
-        printf("Body: %d \n", bodyBuffer[i]);
-    }
+    printf("Body: ");
+    this->DebugArray(bodyBuffer, sizeof bodyBuffer / sizeof *bodyBuffer);
+    printf("\n");
 
     //Move up a commandCounter
     commandCounter++;
+
+    //Prevent overflow in commandCounter and set it to zero
+    if (commandCounter == 256)
+    {
+        commandCounter = 0;
+    }
 }
 
 int acr122::set_interface_attribs (int fd, int speed, int parity)
@@ -189,7 +195,7 @@ int acr122::set_interface_attribs (int fd, int speed, int parity)
 }
 
 
-int acr122::EnableLcdBacklight(int state)
+int acr122::EnableLcdBacklight(bool state)
 {
     int c_class = 0xFF;
     int c_ins = 0x00;
@@ -230,9 +236,68 @@ int acr122::GetFirmwareVersion()
     throw "Not implemented";
 }
 
-int acr122::DisplayLcdMessage()
+int acr122::DisplayLcdMessage(const std::string& message, const std::string& fontSet, bool bold, int position)
 {
-    throw "Not implemented";
+    int fontSetIdBitOne = 0x00;
+    int fontSetIdBitTwo = 0x00;
+    if (fontSet == "A")
+    {
+        fontSetIdBitOne = 0x00;
+        fontSetIdBitTwo = 0x00;
+        if (position > 0x4F || position < 0x00)
+        {
+            throw "Position is out of specified fontset.";
+        }
+    }
+    else if (fontSet == "B")
+    {
+        fontSetIdBitOne = 0x00;
+        fontSetIdBitTwo = 0xFF;
+        if (position > 0x6F || position < 0x00)
+        {
+            throw "Position is out of specified fontset.";
+        }
+    }
+    else if (fontSet == "C")
+    {
+        fontSetIdBitOne = 0xFF;
+        fontSetIdBitTwo = 0x00;
+        if (position > 0x6F || position < 0x00)
+        {
+            throw "Position is out of specified fontset.";
+        }
+    }
+
+    int dec = 0;
+    char binaryConfig[8] = {bold ? 0xFF : 0x00, 0x00, 0x00, fontSetIdBitOne, fontSetIdBitTwo, 0x00, 0x00};
+    //Convert binaryConfig to DEC
+    for (int i = 0; i < 8; i++)
+    {
+        if (binaryConfig[i] == 0xFF)
+        {
+            dec = dec * 2 + 1;
+        }
+        else if (binaryConfig[i] == 0x00)
+        {
+            dec *= 2;
+        }
+    }
+
+    size_t messageSize = message.size();
+
+    std::vector< char > command;
+    command.push_back(0xFF);
+    command.push_back(dec);
+    command.push_back(0x68);
+    command.push_back(position);
+    command.push_back(messageSize);
+
+    for (int i = 0; i < messageSize; i++)
+    {
+        command.push_back(message[i]);
+    }
+
+    this->Command(&command[0]);
 }
 
 int acr122::DisplayLcdMessageEx()
@@ -247,7 +312,7 @@ int acr122::DisplayLcdMessageGB()
 
 int acr122::DrawLcd()
 {
-    \
+
 }
 
 int acr122::StartLcdScrolling()
@@ -314,4 +379,20 @@ int acr122::PowerOffIcc()
 int acr122::ExchangeApdu()
 {
 
+}
+
+int acr122::DebugArray(char* arr, size_t arraySize)
+{
+    printf("%d [ ", arraySize);
+    for(int i = 0; i < arraySize; i ++ )
+    {
+        //printf("0x%02x", arr[i]);
+        printf("%s0x%02x", arr[i] < 0 ? "-":"", arr[i] < 0 ? -(unsigned)arr[i]:arr[i]);
+
+        if ((arraySize - 1) > i)
+        {
+            printf(", ");
+        }
+    }
+    printf(" ]");
 }

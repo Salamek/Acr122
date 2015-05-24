@@ -8,9 +8,12 @@ int main(int argc, char *argv[])
 {
 
     acr122* device = new acr122("/dev/ttyUSB0");
-    device->EnableLcdBacklight(1);
-    device->Beep(3,1,5);
-    device->EnableLcdBacklight(0);
+    device->EnableLcdBacklight(true);
+    //device->Beep(3,1,5);
+
+    device->DisplayLcdMessage("Cuss You All now!", "A", false, 0x00);
+
+    //device->EnableLcdBacklight(false);
     /*HANDLE hReader;
     DWORD ret;
     DWORD numSlots;
